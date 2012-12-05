@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<meta name="apple-mobile-web-app-capable" content="yes">
+
+		<title>RPi Desk Controller</title>
+		<link href='http://fonts.googleapis.com/css?family=Ubuntu' rel='stylesheet' type='text/css'>
+		<link href="bootstrap/less/bootstrap.min.css" rel="stylesheet">
+		<link href="bootstrap/less/bootstrap-responsive.min.css" rel="stylesheet">
+		<style type="text/css">
+			html * {
+				font-family: 'Ubuntu', sans-serif !important;
+			}
+			.myContainer {
+				margin-left: auto;
+				margin-right: auto;
+				width: 400px;
+			}
+			.myBg {
+				background-color: #eee;
+			}
+		</style>
+		<link rel="apple-touch-icon-precomposed" sizes="144x144" href="img/ico/apple-touch-icon-144-precomposed.png">
+		<link rel="apple-touch-icon-precomposed" sizes="114x114" href="img/ico/ico/apple-touch-icon-114-precomposed.png">
+		<link rel="apple-touch-icon-precomposed" sizes="72x72" href="img/ico/apple-touch-icon-72-precomposed.png">
+		<link rel="apple-touch-icon-precomposed" href="img/ico/apple-touch-icon-57-precomposed.png">
+	</head>
+	<body class="myBg">
+		<div class="myContainer">
+			<div style="text-align:center; margin-bottom:20px;">
+				<h2>RPi Desk Controller</h2>
+				<button class="btn btn-primary" id="up"><i class="icon-arrow-up icon-white"></i></button>
+				<button class="btn btn-primary" id="down"><i class="icon-arrow-down icon-white"></i></button>
+				<button class="btn btn-danger" id="kill-switch"><i class="icon-off icon-white"></i> KILL-SWITCH</button>
+			</div>
+			
+			<hr>
+
+			<div style="text-align:center;">
+				<table class="center table-striped" style="width: 100%;">
+					<thead>
+						<tr><th>Channel</th><th>Relay</th><th>GPIO</th></tr>
+					</thead>
+					<tbody data-bind="foreach: relays">
+						<tr>
+							<td data-bind="text: channel"></td>
+							<td><span class="label" data-bind="text: status(), css: { 'label-inverse': bit() == 0, 'label-success': bit() == 1 }"></span></td>
+							<td>
+								<button class="btn btn-success" data-bind="attr: { id: 'ch' + channel() + '_0b1' }">High</button>
+								<button class="btn btn-inverse" data-bind="attr: { id: 'ch' + channel() + '_0b0' }">Low</button>
+							</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+			
+			<hr>
+
+			<div class="footer" style="text-align:center;">
+				<p class="muted">
+  					<small>Powered by Raspberry Pi</small>
+				</p>
+				<img src="img/rpi-logo-small.png"/>
+			</div>
+		</div>
+
+		<script type="text/javascript" src="jquery-1.8.2.min.js"></script>
+		<script type="text/javascript" src="knockout-2.2.0.js"></script>
+		<script type="text/javascript">
+		//NS
+		var RPi = {};
+
+		var Relay = function(ch, bit) {
+			
+			var channel = ko.observable(ch);
+			var bit = ko.observable(bit);
+			
+			var status = ko.computed(function() {
+				return (bit() == "1") ? "On" : "Off";
+			});
+
+			var sendRelayCommand = function(bit) {
+				//$("#ch" + ch + "_0b" + bit).click();
+
+				var cgi_script	= "../cgi-bin/relay.py";
+				var cgi_args	= "?RS_CHANNEL=" + this.channel() + "&RS_BIT=" + bit;
+				var cgi_url 	= cgi_script + cgi_args;
+
+				var beginTime = new Date();
+				console.log("Sending GET: " + cgi_url);
+				$.get(cgi_url, function(data, status) {
+					var endTime = new Date();
+					var diff = new Date(endTime-beginTime);
+					console.log("Sending GET: " + cgi_url + " -> Completed (in " + diff.getTime() + "ms) with status: " + status);
+				},'html');
+			};
+
+			var turnOn = function() {
+				this.sendRelayCommand(1);
+			};
+
+			var turnOff = function() {
+				this.sendRelayCommand(0);
+			};
+
+			return {
+				channel:channel,
+				bit:bit,
+				status:status,
+				turnOn:turnOn,
+				turnOff:turnOff,
+				sendRelayCommand:sendRelayCommand
+			};
+		};
+
+		var relay23 = new Relay(23, 0);
+		var relay24 = new Relay(24, 0);
+
+		var vm = {
+			relays : [
+				relay23,
+				relay24
+			]
+		};
+
+		var UPDATE_INTERVAL = 2000;
+
+		$().ready(function() {
+
+			// blocking call (http://stackoverflow.com/a/12324078/700926)
+			ko.applyBindings(vm);
+
+			var registerButtonEvents = function(relay, bit) {
+				
+				var btn_id = "#ch" + relay.channel() + "_0b" + bit;
+				
+				$(btn_id).click(function() {
+					relay.sendRelayCommand(bit);
+				});
+			};
+
+			for (var i = 0; i < vm.relays.length; i++) {
+				var relay = vm.relays[i];
+				registerButtonEvents(relay, 0);
+				registerButtonEvents(relay, 1);
+			};
+
+			var relayPingTimer = setInterval(function() { 
+				pingRelayStart();
+			}, UPDATE_INTERVAL);
+
+			var pingRelayStart = function() {
+
+				var cgi_url = "../cgi-bin/relay-pinger.py";
+
+				$.get(cgi_url, function(data, status) {
+					data = $.parseJSON(data);
+
+					// key -> channel
+					// value -> bit
+					$.each(data, function(key, value) { 
+						var relay = ko.utils.arrayFirst(vm.relays, function(item) {
+							return item.channel() == key;
+						});
+
+						if(relay)
+							relay.bit(value);
+						else
+							console.log("Could not locate relay in vm!");
+					});
+				},'html');
+			};
+
+			var pingRelayStop = function(timer) {
+				clearInterval(timer);
+			};
+
+			$("#up").mouseup(function(){
+				relay23.turnOff();
+			}).mousedown(function(){
+				relay23.turnOn();
+			});
+
+			$("#down").mouseup(function(){
+				relay24.turnOff();
+			}).mousedown(function(){
+				relay24.turnOn();
+			});
+
+			$("#kill-switch").click(function() {
+				relay23.turnOff();
+				relay24.turnOff();
+			});
+		});
+		</script>
+	</body>
+</html>
